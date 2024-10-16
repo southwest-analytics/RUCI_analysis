@@ -1,0 +1,211 @@
+---
+title: "Rural, Urban, Coastal, Inland and Integrated Neighbourhood Working"
+author: "Richard Blackwell"
+date: "`r Sys.Date()`"
+output: 
+  ioslides_presentation:
+    logo: logo.png
+---
+
+<style>
+div.footnotes {
+  position: absolute;
+  bottom: 0;
+  margin-bottom: 10px;
+  width: 80%;
+  font-size: 0.6em;
+}
+</style>
+
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+
+<script>
+  $(document).ready(function() {
+    $('slide:not(.backdrop):not(.title-slide)').append('<div class=\"footnotes\">');
+
+    $('footnote').each(function(index) {
+      var text  = $(this).html();
+      var fnNum = (index+1).toString().sup();
+      $(this).html(text + fnNum);
+
+      var footnote   = fnNum + ' ' + $(this).attr('content') + '<br/>';
+      var oldContent = $(this).parents('slide').children('div.footnotes').html();
+      var newContent = oldContent + footnote;
+      $(this).parents('slide').children('div.footnotes').html(newContent);
+    });
+  });
+</script>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+library(leaflet)
+library(sf)
+library(htmlwidgets)
+library(conflicted)
+
+# Load the RUCI classification
+df_ruci <- read.csv('C:/Users/richard.blackwell/OneDrive - Health Innovation South West/Workspace/RUCI_analysis/ruci.csv')
+
+# Load OA21 shapefile ----
+sf_oa21 <- st_read(dsn = 'C:/Users/richard.blackwell/OneDrive - Health Innovation South West/Data/OpenGeography/Shapefiles/OA21',
+                   layer = 'OA21') %>%
+  st_transform(crs = 4326) %>%
+  st_make_valid()
+
+# Load BUA22 shapefile ----
+sf_bua22 <- st_read(dsn = 'C:/Users/richard.blackwell/OneDrive - Health Innovation South West/Workspace/RUCI_analysis/data/BUA22',
+                    layer = 'BUA22') %>%
+  st_transform(crs = 4326) %>%
+  st_make_valid()
+
+# Load ICB23 shapefile ----
+sf_icb23 <- st_read(dsn = 'C:/Users/richard.blackwell/OneDrive - Health Innovation South West/Workspace/RUCI_analysis/data/ICB23',
+                    layer = 'ICB23') %>%
+  st_transform(crs = 4326) %>%
+  st_make_valid()
+
+# Load Census 2021 resident population
+df_popn_oa <- read.csv('C:/Users/richard.blackwell/OneDrive - Health Innovation South West/Workspace/RUCI_analysis/data/TS001/census2021-ts001-oa.csv') %>%
+  select(3,4) %>%
+  rename_with(.fn = ~c('OA21CD','POPN'))
+
+# Join OA to RUCI
+df_ruci <- df_ruci %>% 
+  left_join(df_popn_oa, by = 'OA21CD')
+
+# BUA22 RUCI
+df_ruci_bua <- df_ruci %>% 
+              mutate(RUCI = paste0(RUC, ' - ', CIC)) %>%
+              dplyr::filter(grepl('^E', BUA22CD)) %>%
+              group_by(BUA22CD, BUA22NM, BUA_CLASS, RUCI) %>% 
+              summarise(BUA_POPN = mean(BUA_POPN, na.rm = FALSE),
+                        POPN = sum(POPN, na.rm = FALSE),
+                        .groups = 'keep') %>%
+              ungroup()
+hisw_lad <- c('Cornwall', 'Isles of Scilly', 
+              'East Devon', 'Mid Devon', 'North Devon', 'West Devon',
+              'Exeter', 'Plymouth', 'Torbay',
+              'Torridge', 'Teignbridge', 'South Hams',
+              'Somerset West and Taunton', 'South Somerset', 'Sedgemoor', 'Mendip')
+
+hisw_bua <- df_ruci %>% dplyr::filter(LAD22NM %in% hisw_lad) %>% distinct(BUA22CD) %>% dplyr::filter(grepl('^E', BUA22CD)) %>% .$BUA22CD
+
+hisw_oa <- df_ruci %>% dplyr::filter(LAD22NM %in% hisw_lad) %>% distinct(OA21CD) %>% .$OA21CD
+
+# OA22 RUCI
+df_ruci_oa <- df_ruci %>% 
+              mutate(RUCI = paste0(RUC, ' - ', CIC)) %>%
+              dplyr::filter(grepl('^E', BUA22CD)) %>%
+              group_by(OA21CD, RUCI) %>% 
+              summarise(POPN = sum(POPN, na.rm = FALSE),
+                        .groups = 'keep') %>%
+              ungroup()
+
+# Add the RUCI classification and population to the BUA shapefile
+sf_bua22_hisw <- sf_bua22 %>% dplyr::filter(BUA22CD %in% hisw_bua) %>%
+  left_join(df_ruci_bua %>% select(-BUA22NM), by = 'BUA22CD')
+
+# Add the RUCI classification and population to the OA shapefile
+sf_oa21_hisw <- sf_oa21 %>% dplyr::filter(OA21CD %in% hisw_oa) %>%
+  left_join(df_ruci %>% mutate(RUCI = paste0(RUC, ' - ', CIC)), by = 'OA21CD')
+
+
+```
+
+
+## Definitions
+
+## Try out some footnotes
+
+Lets assume I have a footnote <footnote content="The first awesome footnote!">here</footnote>. And here we are going to have another one: <footnote content="This is my second footnote!">#secFN</footnote>
+
+### Map
+
+```{r map, echo = TRUE}
+palRUCI <- colorFactor(palette = c('Rural - Inland' = '#52731C', 'Rural - Coastal' = '#0084CC',
+                                   'Urban - Inland' = '#B99B84', 'Urban - Coastal' = '#9BBDDB'),
+                       na.color = '#ffffff',
+                       levels = c('Rural - Inland', 'Rural - Coastal', 'Urban - Inland', 'Urban - Coastal'))
+
+map <- leaflet() %>%
+  addTiles(options = tileOptions(opacity = 0.3)) %>%
+  addPolygons(data = sf_bua22_hisw %>% dplyr::filter(RUCI == 'Rural - Inland'),
+              weight = 1,
+              color = ~palRUCI(RUCI),
+              opacity = 1,
+              fillColor = ~palRUCI(RUCI),
+              fillOpacity = 0.7,
+              popup = ~sprintf('[%s] - %s<br>BUA Class: %s<br>RUCI Class: %s<br>Popn: %d', BUA22CD, BUA22NM, BUA_CLASS, RUCI, POPN),
+              group = '[BUA] Rural - Inland') %>%
+  addPolygons(data = sf_bua22_hisw %>% dplyr::filter(RUCI == 'Rural - Coastal'),
+              weight = 1,
+              color = ~palRUCI(RUCI),
+              opacity = 1,
+              fillColor = ~palRUCI(RUCI),
+              fillOpacity = 0.7,
+              popup = ~sprintf('[%s] - %s<br>BUA Class: %s<br>RUCI Class: %s<br>Popn: %d', BUA22CD, BUA22NM, BUA_CLASS, RUCI, POPN),
+              group = '[BUA] Rural - Coastal') %>%  
+    addPolygons(data = sf_bua22_hisw %>% dplyr::filter(RUCI == 'Urban - Inland'),
+              weight = 1,
+              color = ~palRUCI(RUCI),
+              opacity = 1,
+              fillColor = ~palRUCI(RUCI),
+              fillOpacity = 0.7,
+              popup = ~sprintf('[%s] - %s<br>BUA Class: %s<br>RUCI Class: %s<br>Popn: %d', BUA22CD, BUA22NM, BUA_CLASS, RUCI, POPN),
+              group = '[BUA] Urban - Inland') %>%
+  addPolygons(data = sf_bua22_hisw %>% dplyr::filter(RUCI == 'Urban - Coastal'),
+              weight = 1,
+              color = ~palRUCI(RUCI),
+              opacity = 1,
+              fillColor = ~palRUCI(RUCI),
+              fillOpacity = 0.7,
+              popup = ~sprintf('[%s] - %s<br>BUA Class: %s<br>RUCI Class: %s<br>Popn: %d', BUA22CD, BUA22NM, BUA_CLASS, RUCI, POPN),
+              group = '[BUA] Urban - Coastal') %>%  
+    addPolygons(data = sf_oa21_hisw %>% dplyr::filter(RUCI == 'Rural - Inland'),
+                #stroke = FALSE,
+                weight = 1,
+                color = ~palRUCI(RUCI),
+                opacity = 0.3,
+                fillColor = ~palRUCI(RUCI),
+                fillOpacity = 0.7,
+                popup = ~sprintf('[%s]<br>[%s] - %s<br>RUCI Class: %s<br>Popn: %d', OA21CD, LAD22CD, LAD22NM, RUCI, POPN),
+                group = '[OA] Rural - Inland') %>%
+    addPolygons(data = sf_oa21_hisw %>% dplyr::filter(RUCI == 'Rural - Coastal'),
+                #stroke = FALSE,
+                weight = 1,
+                color = ~palRUCI(RUCI),
+                opacity = 0.3,
+                fillColor = ~palRUCI(RUCI),
+                fillOpacity = 0.7,
+                popup = ~sprintf('[%s]<br>[%s] - %s<br>RUCI Class: %s<br>Popn: %d', OA21CD, LAD22CD, LAD22NM, RUCI, POPN),
+                group = '[OA] Rural - Coastal') %>%
+    addPolygons(data = sf_oa21_hisw %>% dplyr::filter(RUCI == 'Urban - Inland'),
+                #stroke = FALSE,
+                weight = 1,
+                color = ~palRUCI(RUCI),
+                opacity = 0.3,
+                fillColor = ~palRUCI(RUCI),
+                fillOpacity = 0.7,
+                popup = ~sprintf('[%s]<br>[%s] - %s<br>RUCI Class: %s<br>Popn: %d', OA21CD, LAD22CD, LAD22NM, RUCI, POPN),
+                group = '[OA] Urban - Inland') %>%
+    addPolygons(data = sf_oa21_hisw %>% dplyr::filter(RUCI == 'Urban - Coastal'),
+                #stroke = FALSE,
+                weight = 1,
+                color = ~palRUCI(RUCI),
+                opacity = 0.3,
+                fillColor = ~palRUCI(RUCI),
+                fillOpacity = 0.7,
+                popup = ~sprintf('[%s]<br>[%s] - %s<br>RUCI Class: %s<br>Popn: %d', OA21CD, LAD22CD, LAD22NM, RUCI, POPN),
+                group = '[OA] Urban - Coastal') %>%
+  addLegend(position = 'topright', pal = palRUCI, 
+            values = c('Rural - Inland', 'Rural - Coastal', 'Urban - Inland', 'Urban - Coastal')) %>%
+  addLayersControl(overlayGroups = c('[BUA] Rural - Inland', '[BUA] Rural - Coastal', 
+                                     '[BUA] Urban - Inland', '[BUA] Urban - Coastal', 
+                                     '[OA] Rural - Inland', '[OA] Rural - Coastal', 
+                                     '[OA] Urban - Inland', '[OA] Urban - Coastal'))
+map
+#saveWidget(map, 'map.html')
+
+```
